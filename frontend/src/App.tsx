@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
   Excalidraw,
+  MainMenu,
   convertToExcalidrawElements,
   CaptureUpdateAction,
   ExcalidrawImperativeAPI,
@@ -10,6 +11,14 @@ import {
 import type { ExcalidrawElement, NonDeleted, NonDeletedExcalidrawElement } from '@excalidraw/excalidraw/types/element/types'
 import { convertMermaidToExcalidraw, DEFAULT_MERMAID_CONFIG } from './utils/mermaidConverter'
 import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw'
+import AgentChatBar from './components/AgentChatBar'
+import CardStackOverlay, { cardStackIcon } from './features/CardStackOverlay'
+import CardDocPanel from './features/CardDocPanel'
+import { useCardStack } from './features/useCardStack'
+import { positionBoundText } from './features/cardStack'
+import ProjectsPanel, { ProjectPill, projectsIcon } from './features/ProjectsPanel'
+import { useProjects } from './features/useProjects'
+import type { UiTheme } from './features/theme'
 
 // Type definitions
 type ExcalidrawAPIRefValue = ExcalidrawImperativeAPI;
@@ -154,7 +163,10 @@ const isShapeContainerType = (type: string | undefined): boolean => {
   return type === 'rectangle' || type === 'ellipse' || type === 'diamond'
 }
 
-const recenterBoundShapeTextElements = (
+// Reposiciona o texto preso dentro de uma forma. Não é sempre centro: respeita
+// textAlign/verticalAlign, senão o label de um card (topo/esquerda) salta pro
+// meio a cada reload.
+const repositionBoundShapeTextElements = (
   elements: Partial<ExcalidrawElement>[]
 ): Partial<ExcalidrawElement>[] => {
   const elementMap = new Map(elements.map((el) => [el.id, el]))
@@ -187,8 +199,7 @@ const recenterBoundShapeTextElements = (
 
     return {
       ...element,
-      x: container.x + (container.width - textElement.width) / 2,
-      y: container.y + (container.height - textElement.height) / 2,
+      ...positionBoundText(textElement, container),
     }
   })
 }
@@ -275,6 +286,11 @@ const restoreBindings = (
     if (orig.elbowed !== undefined && el.elbowed === undefined) {
       patched.elbowed = orig.elbowed;
     }
+    // customData carrega o vínculo do card stack (coluna/card). Se o convert
+    // descartar, a pilha vira um monte de retângulos soltos no reload.
+    if (orig.customData && !el.customData) {
+      patched.customData = orig.customData;
+    }
 
     return patched;
   });
@@ -293,7 +309,7 @@ const convertElementsPreservingImageProps = (
   // so we cannot assume a 1:1 mapping — return all converted elements directly.
   const convertedNonImageElements = convertToExcalidrawElements(nonImageElements as any, { regenerateIds: false })
   const restoredNonImageElements = restoreBindings(convertedNonImageElements, nonImageElements)
-  return recenterBoundShapeTextElements([...restoredNonImageElements, ...imageElements, ...freedrawElements])
+  return repositionBoundShapeTextElements([...restoredNonImageElements, ...imageElements, ...freedrawElements])
 }
 
 function App(): JSX.Element {
@@ -304,6 +320,8 @@ function App(): JSX.Element {
     excalidrawAPIRef.current = excalidrawAPI
   }, [excalidrawAPI])
   const [isConnected, setIsConnected] = useState<boolean>(false)
+  // Espelha o tema do canvas: os painéis próprios seguem o claro/escuro dele.
+  const [uiTheme, setUiTheme] = useState<UiTheme>('light')
   const websocketRef = useRef<WebSocket | null>(null)
 
   // Sync state management
@@ -355,27 +373,29 @@ function App(): JSX.Element {
     }
   }, [excalidrawAPI, isConnected])
 
-  const loadExistingElements = async (): Promise<void> => {
+  // `replace` força aplicar o resultado mesmo vazio. É o que troca de projeto
+  // precisa: sem isso, abrir um projeto em branco deixaria a cena anterior na tela.
+  const loadExistingElements = async (options: { replace?: boolean } = {}): Promise<void> => {
+    const api = excalidrawAPIRef.current
     try {
       const response = await fetch('/api/elements')
       const result: ApiResponse = await response.json()
 
-      if (result.success && result.elements && result.elements.length > 0) {
-        const cleanedElements = result.elements.map(cleanElementForExcalidraw)
+      const incoming = result.success && result.elements ? result.elements : []
+      if (api && (options.replace || incoming.length > 0)) {
+        const cleanedElements = incoming.map(cleanElementForExcalidraw)
         const convertedElements = convertElementsPreservingImageProps(cleanedElements)
-        if (excalidrawAPI) {
-          applySceneUpdateWithoutAutoSync(excalidrawAPI, {
-            elements: convertedElements,
-            captureUpdate: CaptureUpdateAction.NEVER
-          })
-        }
+        applySceneUpdateWithoutAutoSync(api, {
+          elements: convertedElements,
+          captureUpdate: CaptureUpdateAction.NEVER
+        })
       }
 
       const filesResponse = await fetch('/api/files')
       if (filesResponse.ok) {
         const filesResult = await filesResponse.json() as ApiResponse
         if (filesResult.files) {
-          excalidrawAPI?.addFiles(Object.values(filesResult.files))
+          api?.addFiles(Object.values(filesResult.files))
         }
       }
     } catch (error) {
@@ -529,6 +549,24 @@ function App(): JSX.Element {
             elements: [],
             captureUpdate: CaptureUpdateAction.NEVER
           })
+          break
+
+        case 'project_switched':
+          // Pode vir de outra aba ou do próprio backend. Recarrega a cena nova.
+          console.log('Projeto trocado:', (data as any).projectName)
+          void projectsRef.current.adoptSwitch((data as any).epoch)
+          break
+
+        case 'agent_lock':
+          // Agente operando: suspende o auto-sync pra não sobrescrever as injeções.
+          suppressAutoSyncCountRef.current += 1
+          break
+
+        case 'agent_unlock':
+          // Segura o suppress um pouco além pra cobrir o ciclo de auto-sync (1.2s).
+          setTimeout(() => {
+            suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+          }, 1500)
           break
 
         case 'export_image_request':
@@ -780,9 +818,23 @@ function App(): JSX.Element {
         },
         body: JSON.stringify({
           elements: backendElements,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          epoch: projectsRef.current.epochRef.current
         })
       })
+
+      if (response.status === 409) {
+        // O projeto trocou enquanto este sync estava no ar: a cena em tela é a
+        // antiga. Descarta e recarrega do servidor em vez de sobrescrever.
+        const stale = await response.json().catch(() => ({}))
+        console.warn('Sync descartado: o projeto aberto mudou', stale)
+        if (typeof stale.epoch === 'number') {
+          projectsRef.current.epochRef.current = stale.epoch
+        }
+        await switchScene()
+        if (!silent) setSyncStatus('idle')
+        return
+      }
 
       if (response.ok) {
         const result: ApiResponse = await response.json()
@@ -833,6 +885,59 @@ function App(): JSX.Element {
       void syncToBackend({ silent: true })
     }, AUTO_SYNC_DEBOUNCE_MS)
   }
+
+  const cardStack = useCardStack({
+    excalidrawAPI,
+    markInteraction: () => {
+      userInteractedRef.current = true
+    }
+  })
+
+  // Troca de projeto: cancela qualquer sync pendente da cena antiga e recarrega
+  // a nova do servidor. A ordem importa, senão o sync atrasado volta pro disco.
+  const switchScene = async (): Promise<void> => {
+    if (autoSyncTimerRef.current) {
+      clearTimeout(autoSyncTimerRef.current)
+      autoSyncTimerRef.current = null
+    }
+    userInteractedRef.current = false
+    suppressAutoSyncCountRef.current += 1
+    try {
+      await loadExistingElements({ replace: true })
+    } finally {
+      setTimeout(() => {
+        suppressAutoSyncCountRef.current = Math.max(0, suppressAutoSyncCountRef.current - 1)
+      }, AUTO_SYNC_DEBOUNCE_MS)
+    }
+  }
+
+  const projects = useProjects({ onSceneSwitched: switchScene })
+  const projectsRef = useRef(projects)
+  useEffect(() => {
+    projectsRef.current = projects
+  }, [projects])
+
+  // Cmd+S salva no projeto (em vez de baixar um arquivo pra Downloads).
+  // Cmd+O abre o painel de projetos.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+      const key = event.key.toLowerCase()
+      if (key === 's' && !event.shiftKey) {
+        event.preventDefault()
+        event.stopPropagation()
+        void projectsRef.current.save()
+      }
+      if (key === 'o') {
+        event.preventDefault()
+        event.stopPropagation()
+        projectsRef.current.openPanel()
+      }
+    }
+    // Captura: o Excalidraw também escuta Cmd+S e baixaria o arquivo.
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [])
 
   const clearCanvas = async (): Promise<void> => {
     if (excalidrawAPI) {
@@ -912,6 +1017,10 @@ function App(): JSX.Element {
           onPointerDownCapture={() => {
             userInteractedRef.current = true
           }}
+          onPointerUpCapture={() => {
+            // Soltou o mouse: é aqui que o card recém-arrastado encaixa na coluna.
+            cardStack.handlePointerUp()
+          }}
           onKeyDownCapture={() => {
             userInteractedRef.current = true
           }}
@@ -919,7 +1028,9 @@ function App(): JSX.Element {
         >
           <Excalidraw
             excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
-            onChange={() => {
+            onChange={(elements, appState) => {
+              cardStack.handleChange(elements, appState)
+              setUiTheme(appState.theme === 'dark' ? 'dark' : 'light')
               scheduleAutoSync()
             }}
             initialData={{
@@ -929,9 +1040,99 @@ function App(): JSX.Element {
                 viewBackgroundColor: '#ffffff'
               }
             }}
-          />
+          >
+            <MainMenu>
+              <MainMenu.Item
+                icon={projectsIcon}
+                shortcut="Cmd+O"
+                onSelect={projects.openPanel}
+              >
+                Projetos...
+              </MainMenu.Item>
+              <MainMenu.Item onSelect={() => void projects.create()}>
+                Novo projeto
+              </MainMenu.Item>
+              <MainMenu.Item shortcut="Cmd+S" onSelect={() => void projects.save()}>
+                Salvar agora
+              </MainMenu.Item>
+              <MainMenu.Separator />
+              <MainMenu.Item
+                icon={cardStackIcon}
+                shortcut="S"
+                onSelect={cardStack.createColumn}
+              >
+                Coluna de cards
+              </MainMenu.Item>
+              <MainMenu.Separator />
+              {/* LoadScene sai do menu: ele usa Cmd+O (conflito com Projetos) e
+                  substitui a cena aberta, o que agora sobrescreveria o projeto.
+                  O caminho equivalente é "Importar arquivo" no painel, que cria
+                  um projeto novo em vez de engolir o atual. */}
+              <MainMenu.DefaultItems.SaveAsImage />
+              <MainMenu.DefaultItems.Export />
+              <MainMenu.DefaultItems.SearchMenu />
+              <MainMenu.DefaultItems.CommandPalette />
+              <MainMenu.DefaultItems.Help />
+              <MainMenu.DefaultItems.ClearCanvas />
+              <MainMenu.Separator />
+              <MainMenu.DefaultItems.ToggleTheme />
+              <MainMenu.DefaultItems.ChangeCanvasBackground />
+            </MainMenu>
+          </Excalidraw>
         </div>
       </div>
+      <CardStackOverlay
+        anchors={cardStack.anchors}
+        cardAnchors={cardStack.cardAnchors}
+        theme={uiTheme}
+        onAddCard={cardStack.addCard}
+        onOpenDoc={cardStack.openDocFor}
+      />
+      <CardDocPanel
+        open={cardStack.openDoc !== null}
+        theme={uiTheme}
+        title={cardStack.openDoc?.title ?? ''}
+        markdown={cardStack.openDoc?.markdown ?? ''}
+        onChangeMarkdown={(markdown) => {
+          if (cardStack.openDoc) cardStack.saveDoc(cardStack.openDoc.cardId, markdown)
+        }}
+        onChangeTitle={(title) => {
+          if (cardStack.openDoc) cardStack.saveTitle(cardStack.openDoc.cardId, title)
+        }}
+        onDeleteCard={() => {
+          if (cardStack.openDoc) cardStack.deleteCard(cardStack.openDoc.cardId)
+        }}
+        onClose={cardStack.closeDoc}
+      />
+      {projects.current && (
+        <ProjectPill
+          name={projects.current.name}
+          theme={uiTheme}
+          saveState={projects.saveState}
+          onClick={projects.openPanel}
+        />
+      )}
+      <ProjectsPanel
+        open={projects.panelOpen}
+        theme={uiTheme}
+        projects={projects.list}
+        current={projects.current}
+        dir={projects.dir}
+        loose={projects.loose}
+        error={projects.error}
+        saveState={projects.saveState}
+        onClose={projects.closePanel}
+        onOpenProject={(id) => void projects.open(id)}
+        onCreate={(name) => void projects.create(name)}
+        onRename={(id, name) => void projects.rename(id, name)}
+        onDelete={(id) => void projects.remove(id)}
+        onDuplicate={(id) => void projects.duplicate(id)}
+        onRescan={() => void projects.rescan()}
+        onImportLoose={(filenames) => void projects.importLoose(filenames)}
+        onImportContent={(name, content) => void projects.importContent(name, content)}
+        onSave={() => void projects.save()}
+      />
+      <AgentChatBar />
     </div>
   )
 }

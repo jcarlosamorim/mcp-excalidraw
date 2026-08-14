@@ -28,6 +28,27 @@ import {
 } from './types.js';
 import { z } from 'zod';
 import WebSocket from 'ws';
+import { startPersistence } from './storage.js';
+import {
+  initProjects,
+  startProjectAutosave,
+  listProjects,
+  getCurrentProject,
+  createProject,
+  openProject,
+  renameProject,
+  deleteProject,
+  duplicateProject,
+  importScene,
+  rescanProjects,
+  listLooseScenes,
+  importLooseScenes,
+  saveCurrentProject,
+  getProjectsDir,
+  getSceneEpoch,
+  serializeScene,
+} from './projects.js';
+import { runAgentTurn, runInterviewQuestions, dslToElementData, DslSchema } from './agent.js';
 
 // Load environment variables
 dotenv.config();
@@ -127,7 +148,9 @@ const CreateElementSchema = z.object({
   opacity: z.number().optional(),
   text: z.string().optional(),
   label: z.object({
-    text: z.string()
+    text: z.string(),
+    strokeColor: z.string().optional(),
+    fontSize: z.number().optional(),
   }).optional(),
   fontSize: z.number().optional(),
   fontFamily: z.union([z.string(), z.number()]).optional(),
@@ -183,7 +206,9 @@ const UpdateElementSchema = z.object({
   text: z.string().optional(),
   originalText: z.string().optional(),
   label: z.object({
-    text: z.string()
+    text: z.string(),
+    strokeColor: z.string().optional(),
+    fontSize: z.number().optional(),
   }).optional(),
   fontSize: z.number().optional(),
   fontFamily: z.union([z.string(), z.number()]).optional(),
@@ -729,10 +754,91 @@ app.post('/api/elements/from-mermaid', (req: Request, res: Response) => {
   }
 });
 
+// ===== AGENTE DE DIAGRAMAÇÃO =====
+// Injeta elementData (formato CreateElementSchema) no canvas: mesmo pipeline do /batch.
+function injectAgentElements(elementData: any[]): ServerElement[] {
+  const created: ServerElement[] = [];
+  elementData.forEach((d) => {
+    const params = CreateElementSchema.parse(d);
+    const id = params.id || generateId();
+    created.push({
+      id,
+      ...params,
+      fontFamily: normalizeFontFamily(params.fontFamily),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1,
+    } as ServerElement);
+  });
+  resolveArrowBindings(created);
+  created.forEach((el) => elements.set(el.id, el));
+  broadcast({ type: 'elements_batch_created', elements: created } as BatchCreatedMessage);
+  return created;
+}
+
+// Passo 1 / teste: injeta um diagrama a partir da DSL crua (sem LLM).
+app.post('/api/agent/diagram', (req: Request, res: Response) => {
+  try {
+    broadcast({ type: 'agent_lock' } as any);
+    const dsl = DslSchema.parse(req.body);
+    const created = injectAgentElements(dslToElementData(dsl));
+    res.json({ success: true, count: created.length });
+  } catch (error) {
+    res.status(400).json({ success: false, error: (error as Error).message });
+  } finally {
+    broadcast({ type: 'agent_unlock' } as any);
+  }
+});
+
+// Entrevista do agente: pedido -> perguntas de múltipla escolha (andaime cognitivo). Stateless.
+app.post('/api/agent/interview', async (req: Request, res: Response) => {
+  const { message } = req.body || {};
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({ success: false, error: 'message (string) é obrigatório' });
+  }
+  let locked = false;
+  try {
+    broadcast({ type: 'agent_lock' } as any);
+    locked = true;
+    const result = await runInterviewQuestions(message);
+    res.json({ success: true, perguntas: result.perguntas, complexidade: result.complexidade });
+  } catch (error) {
+    logger.error('Interview error:', error);
+    res.json({ success: false, fallback: true, error: (error as Error).message });
+  } finally {
+    if (locked) broadcast({ type: 'agent_unlock' } as any);
+  }
+});
+
+// Chat do agente: pedido (+ respostas da entrevista) -> DSL calibrada -> canvas.
+app.post('/api/agent/chat', async (req: Request, res: Response) => {
+  const { message, history, perguntas, answers } = req.body || {};
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({ success: false, error: 'message (string) é obrigatório' });
+  }
+  let locked = false;
+  try {
+    broadcast({ type: 'agent_lock' } as any);
+    locked = true;
+    const { elementData, actions, steps } = await runAgentTurn(
+      message,
+      Array.isArray(history) ? history : [],
+      (Array.isArray(perguntas) && perguntas.length) ? { perguntas, answers: answers || {} } : undefined,
+    );
+    const created = injectAgentElements(elementData);
+    res.json({ success: true, actions, count: created.length, steps });
+  } catch (error) {
+    logger.error('Agent chat error:', error);
+    res.status(400).json({ success: false, error: (error as Error).message });
+  } finally {
+    if (locked) broadcast({ type: 'agent_unlock' } as any);
+  }
+});
+
 // Sync elements from frontend (overwrite sync)
 app.post('/api/elements/sync', (req: Request, res: Response) => {
   try {
-    const { elements: frontendElements, timestamp } = req.body;
+    const { elements: frontendElements, timestamp, epoch } = req.body;
 
     logger.info(`Sync request received: ${frontendElements.length} elements`, {
       timestamp,
@@ -744,6 +850,17 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         error: 'Expected elements to be an array'
+      });
+    }
+
+    // Sync de uma cena que já não é a aberta: recusa em vez de sobrescrever o
+    // projeto novo com o conteúdo do antigo.
+    if (epoch !== undefined && epoch !== getSceneEpoch()) {
+      logger.warn(`Sync recusado: epoch ${epoch} != ${getSceneEpoch()} (projeto trocou)`);
+      return res.status(409).json({
+        success: false,
+        error: 'stale_epoch',
+        epoch: getSceneEpoch()
       });
     }
 
@@ -811,6 +928,154 @@ app.post('/api/elements/sync', (req: Request, res: Response) => {
       details: 'Internal server error during sync operation'
     });
   }
+});
+
+// ─── Projetos ─────────────────────────────────────────────────
+// Cada projeto é uma cena inteira, num .excalidraw dentro da pasta de projetos.
+// Trocar de projeto muda o epoch: sync do front com epoch velho é recusado.
+
+function broadcastProjectSwitch(project: { id: string; name: string }): void {
+  broadcast({
+    type: 'project_switched',
+    projectId: project.id,
+    projectName: project.name,
+    epoch: getSceneEpoch(),
+    count: elements.size,
+    timestamp: new Date().toISOString(),
+  } as any);
+}
+
+const projectError = (res: Response, err: unknown, status = 400) => {
+  logger.error('Projeto:', err);
+  res.status(status).json({ success: false, error: (err as Error).message });
+};
+
+app.get('/api/projects', (_req: Request, res: Response) => {
+  try {
+    res.json({
+      success: true,
+      projects: listProjects(),
+      current: getCurrentProject(),
+      dir: getProjectsDir(),
+      epoch: getSceneEpoch(),
+    });
+  } catch (err) {
+    projectError(res, err, 500);
+  }
+});
+
+app.get('/api/projects/current', (_req: Request, res: Response) => {
+  res.json({ success: true, current: getCurrentProject(), epoch: getSceneEpoch() });
+});
+
+// Novo projeto: salva o que está aberto antes de esvaziar a cena.
+app.post('/api/projects', (req: Request, res: Response) => {
+  try {
+    saveCurrentProject();
+    const project = createProject(req.body?.name);
+    broadcastProjectSwitch(project);
+    res.json({ success: true, project, epoch: getSceneEpoch() });
+  } catch (err) {
+    projectError(res, err);
+  }
+});
+
+app.post('/api/projects/save', (_req: Request, res: Response) => {
+  try {
+    const saved = saveCurrentProject();
+    if (!saved) return res.status(404).json({ success: false, error: 'Nenhum projeto aberto' });
+    res.json({ success: true, project: saved });
+  } catch (err) {
+    projectError(res, err, 500);
+  }
+});
+
+app.post('/api/projects/rescan', (_req: Request, res: Response) => {
+  try {
+    const result = rescanProjects();
+    res.json({ success: true, ...result, projects: listProjects() });
+  } catch (err) {
+    projectError(res, err, 500);
+  }
+});
+
+app.post('/api/projects/import', (req: Request, res: Response) => {
+  try {
+    const { name, content } = req.body || {};
+    if (typeof content !== 'string') {
+      return res.status(400).json({ success: false, error: 'content (string) é obrigatório' });
+    }
+    const project = importScene(name, content);
+    res.json({ success: true, project });
+  } catch (err) {
+    projectError(res, err);
+  }
+});
+
+// Cenas soltas na pasta Downloads (o destino do Ctrl+S do Excalidraw)
+app.get('/api/projects/loose', (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, scenes: listLooseScenes() });
+  } catch (err) {
+    projectError(res, err, 500);
+  }
+});
+
+app.post('/api/projects/loose/import', (req: Request, res: Response) => {
+  try {
+    const list = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
+    const imported = importLooseScenes(list);
+    res.json({ success: true, imported, projects: listProjects() });
+  } catch (err) {
+    projectError(res, err, 500);
+  }
+});
+
+app.post('/api/projects/:id/open', (req: Request, res: Response) => {
+  try {
+    const project = openProject(req.params.id as string);
+    broadcastProjectSwitch(project);
+    res.json({ success: true, project, epoch: getSceneEpoch(), count: elements.size });
+  } catch (err) {
+    projectError(res, err, 404);
+  }
+});
+
+app.post('/api/projects/:id/duplicate', (req: Request, res: Response) => {
+  try {
+    saveCurrentProject();
+    res.json({ success: true, project: duplicateProject(req.params.id as string, req.body?.name) });
+  } catch (err) {
+    projectError(res, err, 404);
+  }
+});
+
+app.patch('/api/projects/:id', (req: Request, res: Response) => {
+  try {
+    const project = renameProject(req.params.id as string, req.body?.name || '');
+    res.json({ success: true, project });
+  } catch (err) {
+    projectError(res, err);
+  }
+});
+
+app.delete('/api/projects/:id', (req: Request, res: Response) => {
+  try {
+    const { deleted, current } = deleteProject(req.params.id as string);
+    if (current) broadcastProjectSwitch(current);
+    res.json({ success: true, deleted, current, epoch: getSceneEpoch() });
+  } catch (err) {
+    projectError(res, err, 404);
+  }
+});
+
+// Baixar a cena atual como .excalidraw (o Ctrl+S clássico continua possível)
+app.get('/api/projects/export', (_req: Request, res: Response) => {
+  const current = getCurrentProject();
+  const name = current?.name || 'canvas';
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}.excalidraw"`);
+  res.send(serializeScene());
 });
 
 // ─── Files API (for image elements) ───────────────────────────
@@ -1272,6 +1537,19 @@ async function startServer(): Promise<void> {
       );
       process.exit(1);
     }
+  }
+
+  // Hidrata diagramas salvos do disco e liga a persistência automática
+  startPersistence();
+
+  // Projetos: adota a cena hidratada como projeto na primeira vez, ou reabre o
+  // último. Precisa vir depois do startPersistence pra ter o que adotar.
+  try {
+    const current = initProjects();
+    logger.info(`Projeto aberto: ${current.name} → ${current.path}`);
+    startProjectAutosave();
+  } catch (err) {
+    logger.error('Falha ao iniciar o catálogo de projetos:', err);
   }
 
   server.listen(PORT, HOST, () => {
