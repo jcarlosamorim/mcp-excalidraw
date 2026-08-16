@@ -21,6 +21,10 @@ export interface Palette {
   codeBg: string
   codeText: string
   quoteBar: string
+  /** fundo do canvas, pro miolo de formas vazadas por cima dele */
+  canvasBg: string
+  /** miolo da bolinha de retrair do mapa mental */
+  hubFill: string
   /** véu atrás do modal */
   scrim: string
   shadow: string
@@ -46,6 +50,8 @@ const LIGHT: Palette = {
   codeBg: '#f4f6f8',
   codeText: '#243b53',
   quoteBar: '#d0bfff',
+  canvasBg: '#ffffff',
+  hubFill: '#dee2e6',
   scrim: 'rgba(15, 23, 32, 0.38)',
   shadow: '0 18px 48px rgba(0,0,0,0.22)',
   floatBg: 'rgba(255,255,255,0.95)',
@@ -70,6 +76,10 @@ const DARK: Palette = {
   codeBg: '#1b1b21',
   codeText: '#ced4da',
   quoteBar: '#5f3dc4',
+  // O canvas em tema escuro é #121212: é essa a cor que o miolo da bolinha
+  // vazada precisa ter pra esconder a linha que passa por baixo dela.
+  canvasBg: '#121212',
+  hubFill: '#39414d',
   scrim: 'rgba(0, 0, 0, 0.55)',
   shadow: '0 18px 48px rgba(0,0,0,0.55)',
   floatBg: 'rgba(45,45,58,0.96)',

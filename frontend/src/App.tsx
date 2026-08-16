@@ -16,6 +16,8 @@ import CardStackOverlay, { cardStackIcon } from './features/CardStackOverlay'
 import CardDocPanel from './features/CardDocPanel'
 import { useCardStack } from './features/useCardStack'
 import { positionBoundText } from './features/cardStack'
+import MindmapOverlay, { mindmapIcon } from './features/MindmapOverlay'
+import { useMindmap } from './features/useMindmap'
 import ProjectsPanel, { ProjectPill, projectsIcon } from './features/ProjectsPanel'
 import { useProjects } from './features/useProjects'
 import type { UiTheme } from './features/theme'
@@ -893,6 +895,13 @@ function App(): JSX.Element {
     }
   })
 
+  const mindmap = useMindmap({
+    excalidrawAPI,
+    markInteraction: () => {
+      userInteractedRef.current = true
+    }
+  })
+
   // Troca de projeto: cancela qualquer sync pendente da cena antiga e recarrega
   // a nova do servidor. A ordem importa, senão o sync atrasado volta pro disco.
   const switchScene = async (): Promise<void> => {
@@ -1016,10 +1025,15 @@ function App(): JSX.Element {
         <div
           onPointerDownCapture={() => {
             userInteractedRef.current = true
+            // Guarda de onde cada nó do mapa partiu, pra saber no fim do gesto
+            // quem o usuário arrastou de verdade.
+            mindmap.handlePointerDown()
           }}
           onPointerUpCapture={() => {
-            // Soltou o mouse: é aqui que o card recém-arrastado encaixa na coluna.
+            // Soltou o mouse: é aqui que o card recém-arrastado encaixa na coluna
+            // e o tópico solto encontra o novo pai.
             cardStack.handlePointerUp()
+            mindmap.handlePointerUp()
           }}
           onKeyDownCapture={() => {
             userInteractedRef.current = true
@@ -1030,6 +1044,7 @@ function App(): JSX.Element {
             excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
             onChange={(elements, appState) => {
               cardStack.handleChange(elements, appState)
+              mindmap.handleChange(elements, appState)
               setUiTheme(appState.theme === 'dark' ? 'dark' : 'light')
               scheduleAutoSync()
             }}
@@ -1063,6 +1078,13 @@ function App(): JSX.Element {
               >
                 Coluna de cards
               </MainMenu.Item>
+              <MainMenu.Item
+                icon={mindmapIcon}
+                shortcut="M"
+                onSelect={mindmap.createMap}
+              >
+                Mapa mental
+              </MainMenu.Item>
               <MainMenu.Separator />
               {/* LoadScene sai do menu: ele usa Cmd+O (conflito com Projetos) e
                   substitui a cena aberta, o que agora sobrescreveria o projeto.
@@ -1087,6 +1109,16 @@ function App(): JSX.Element {
         theme={uiTheme}
         onAddCard={cardStack.addCard}
         onOpenDoc={cardStack.openDocFor}
+      />
+      <MindmapOverlay
+        toolbar={mindmap.toolbar}
+        toggleAnchors={mindmap.toggleAnchors}
+        theme={uiTheme}
+        onAddChild={mindmap.addChild}
+        onAddSibling={mindmap.addSibling}
+        onOutdent={mindmap.outdentNode}
+        onToggleCollapse={mindmap.toggleCollapseNode}
+        onDelete={mindmap.deleteBranch}
       />
       <CardDocPanel
         open={cardStack.openDoc !== null}
