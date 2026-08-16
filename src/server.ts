@@ -49,6 +49,14 @@ import {
   serializeScene,
 } from './projects.js';
 import { runAgentTurn, runInterviewQuestions, dslToElementData, DslSchema } from './agent.js';
+import {
+  getLogosDir,
+  importFromDir,
+  listLogos,
+  pathFor,
+  removeLogo,
+  saveLogo,
+} from './logos.js';
 
 // Load environment variables
 dotenv.config();
@@ -1109,6 +1117,54 @@ app.delete('/api/files/:id', (req: Request, res: Response) => {
   } else {
     res.status(404).json({ success: false, error: `File with ID ${id} not found` });
   }
+});
+
+// ─── Banco de logos ───────────────────────────────────────────
+// Pasta em disco com as marcas usadas nos diagramas. O binário é servido por
+// URL em vez de dataURL: o painel mostra dezenas de logos de uma vez e quem
+// cuida do cache é o navegador. O dataURL só é montado na hora de inserir.
+
+app.get('/api/logos', (_req: Request, res: Response) => {
+  res.json({ success: true, dir: getLogosDir(), logos: listLogos() });
+});
+
+app.get('/api/logos/:id/raw', (req: Request, res: Response) => {
+  const found = pathFor(req.params.id as string);
+  if (!found) {
+    return res.status(404).json({ success: false, error: 'Logo não encontrada' });
+  }
+  res.setHeader('Content-Type', found.info.mime);
+  res.setHeader('Cache-Control', 'no-cache');
+  return res.sendFile(path.resolve(found.path));
+});
+
+app.post('/api/logos/import', (req: Request, res: Response) => {
+  const dir = req.body?.dir;
+  if (typeof dir !== 'string' || dir.trim() === '') {
+    return res.status(400).json({ success: false, error: 'Informe a pasta de origem' });
+  }
+  const result = importFromDir(dir.trim());
+  return res.json({ success: true, ...result, logos: listLogos() });
+});
+
+app.post('/api/logos/upload', (req: Request, res: Response) => {
+  const { filename, dataURL } = req.body || {};
+  if (typeof filename !== 'string' || typeof dataURL !== 'string') {
+    return res.status(400).json({ success: false, error: 'Envie filename e dataURL' });
+  }
+  const logo = saveLogo(filename, dataURL);
+  if (!logo) {
+    return res.status(400).json({ success: false, error: 'Formato de imagem não suportado' });
+  }
+  return res.json({ success: true, logo, logos: listLogos() });
+});
+
+app.delete('/api/logos/:id', (req: Request, res: Response) => {
+  const removed = removeLogo(req.params.id as string);
+  if (!removed) {
+    return res.status(404).json({ success: false, error: 'Logo não encontrada' });
+  }
+  return res.json({ success: true, logos: listLogos() });
 });
 
 // Image export: request (MCP -> Express -> WebSocket -> Frontend)

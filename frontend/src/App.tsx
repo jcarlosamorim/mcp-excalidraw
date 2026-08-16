@@ -18,6 +18,8 @@ import { useCardStack } from './features/useCardStack'
 import { positionBoundText } from './features/cardStack'
 import MindmapOverlay, { mindmapIcon } from './features/MindmapOverlay'
 import { useMindmap } from './features/useMindmap'
+import LogosPanel, { logosIcon } from './features/LogosPanel'
+import { useLogos } from './features/useLogos'
 import ProjectsPanel, { ProjectPill, projectsIcon } from './features/ProjectsPanel'
 import { useProjects } from './features/useProjects'
 import type { UiTheme } from './features/theme'
@@ -902,6 +904,13 @@ function App(): JSX.Element {
     }
   })
 
+  const logos = useLogos({
+    excalidrawAPI,
+    markInteraction: () => {
+      userInteractedRef.current = true
+    }
+  })
+
   // Troca de projeto: cancela qualquer sync pendente da cena antiga e recarrega
   // a nova do servidor. A ordem importa, senão o sync atrasado volta pro disco.
   const switchScene = async (): Promise<void> => {
@@ -1085,6 +1094,13 @@ function App(): JSX.Element {
               >
                 Mapa mental
               </MainMenu.Item>
+              <MainMenu.Item
+                icon={logosIcon}
+                shortcut="B"
+                onSelect={logos.openPanel}
+              >
+                Banco de logos
+              </MainMenu.Item>
               <MainMenu.Separator />
               {/* LoadScene sai do menu: ele usa Cmd+O (conflito com Projetos) e
                   substitui a cena aberta, o que agora sobrescreveria o projeto.
@@ -1135,6 +1151,20 @@ function App(): JSX.Element {
           if (cardStack.openDoc) cardStack.deleteCard(cardStack.openDoc.cardId)
         }}
         onClose={cardStack.closeDoc}
+      />
+      <LogosPanel
+        open={logos.panelOpen}
+        theme={uiTheme}
+        logos={logos.logos}
+        dir={logos.dir}
+        busy={logos.busy}
+        error={logos.error}
+        notice={logos.notice}
+        onClose={logos.closePanel}
+        onInsert={(logo) => void logos.insert(logo)}
+        onImport={(dir) => void logos.importFrom(dir)}
+        onUpload={(files) => void logos.upload(files)}
+        onRemove={(id) => void logos.remove(id)}
       />
       {projects.current && (
         <ProjectPill
