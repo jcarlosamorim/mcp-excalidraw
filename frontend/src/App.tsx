@@ -20,6 +20,7 @@ import MindmapOverlay, { mindmapIcon } from './features/MindmapOverlay'
 import { useMindmap } from './features/useMindmap'
 import LogosPanel, { logosIcon } from './features/LogosPanel'
 import { useLogos } from './features/useLogos'
+import { useImageImport } from './features/useImageImport'
 import ProjectsPanel, { ProjectPill, projectsIcon } from './features/ProjectsPanel'
 import { useProjects } from './features/useProjects'
 import type { UiTheme } from './features/theme'
@@ -335,6 +336,10 @@ function App(): JSX.Element {
   const syncInFlightRef = useRef<boolean>(false)
   const suppressAutoSyncCountRef = useRef<number>(0)
   const userInteractedRef = useRef<boolean>(false)
+  // Ids de arquivo (imagem) que o servidor já tem. O auto-sync manda só
+  // elementos; sem persistir os arquivos junto, uma imagem colada/arrastada
+  // vive só nesta aba e vira placeholder no próximo carregamento da cena.
+  const persistedFileIdsRef = useRef<Set<string>>(new Set())
 
   const applySceneUpdateWithoutAutoSync = (
     api: ExcalidrawImperativeAPI,
@@ -400,6 +405,7 @@ function App(): JSX.Element {
         const filesResult = await filesResponse.json() as ApiResponse
         if (filesResult.files) {
           api?.addFiles(Object.values(filesResult.files))
+          Object.keys(filesResult.files).forEach(id => persistedFileIdsRef.current.add(id))
         }
       }
     } catch (error) {
@@ -496,12 +502,16 @@ function App(): JSX.Element {
           // Load files for image elements
           if ((data as any).files) {
             excalidrawAPI.addFiles(Object.values((data as any).files))
+            Object.keys((data as any).files).forEach(id => persistedFileIdsRef.current.add(id))
           }
           break
 
         case 'files_added':
           if (Array.isArray((data as any).files)) {
             excalidrawAPI.addFiles((data as any).files)
+            for (const f of (data as any).files) {
+              if (f?.id) persistedFileIdsRef.current.add(f.id)
+            }
           }
           break
 
@@ -780,6 +790,49 @@ function App(): JSX.Element {
     })
   }
 
+  // Arquivos de imagem que a cena usa e o servidor ainda não tem — o caminho
+  // nativo do Excalidraw (arrastar/colar imagem) só registra o arquivo em
+  // memória, e o sync de elementos não o carrega junto. Foi assim que um lote
+  // de screenshots colados virou placeholder: elemento salvo, arquivo perdido.
+  const persistNewFiles = async (api: ExcalidrawImperativeAPI): Promise<void> => {
+    try {
+      const files = api.getFiles()
+      const usados = new Set(
+        api.getSceneElements()
+          .filter(el => !el.isDeleted && (el as any).fileId)
+          .map(el => (el as any).fileId as string)
+      )
+      const pendentes = Object.entries(files).filter(
+        ([id]) => usados.has(id) && !persistedFileIdsRef.current.has(id)
+      )
+      for (const [id, file] of pendentes) {
+        const payload = {
+          files: [{
+            id,
+            dataURL: (file as any).dataURL,
+            mimeType: (file as any).mimeType || 'image/png',
+            created: (file as any).created || Date.now()
+          }]
+        }
+        const resposta = await fetch('/api/files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        if (resposta.ok) {
+          persistedFileIdsRef.current.add(id)
+        } else {
+          // Marca mesmo assim: repetir a cada sync só encheria o log; o
+          // arquivo volta a ser tentado num recarregamento da página.
+          persistedFileIdsRef.current.add(id)
+          console.error(`Falha ao persistir arquivo de imagem ${id}: HTTP ${resposta.status}`)
+        }
+      }
+    } catch (error) {
+      console.error('Falha ao persistir arquivos de imagem:', error)
+    }
+  }
+
   // Main sync function
   const syncToBackend = async (options: { silent?: boolean } = {}): Promise<void> => {
     const { silent = false } = options
@@ -844,6 +897,7 @@ function App(): JSX.Element {
         const result: ApiResponse = await response.json()
         setLastSyncTime(new Date())
         console.log(`Sync successful: ${result.count} elements synced`)
+        void persistNewFiles(excalidrawAPI)
 
         if (!silent) {
           setSyncStatus('success')
@@ -905,6 +959,13 @@ function App(): JSX.Element {
   })
 
   const logos = useLogos({
+    excalidrawAPI,
+    markInteraction: () => {
+      userInteractedRef.current = true
+    }
+  })
+
+  useImageImport({
     excalidrawAPI,
     markInteraction: () => {
       userInteractedRef.current = true

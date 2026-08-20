@@ -70,7 +70,9 @@ const wss = new WebSocketServer({ server });
 
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+// 64mb: um screenshot retina colado passa fácil de 10mb em base64, e o
+// frontend agora persiste esses arquivos via POST /api/files.
+app.use(express.json({ limit: '64mb' }));
 
 // Serve static files from the build directory
 const staticDir = path.join(__dirname, '../dist');
@@ -1205,9 +1207,9 @@ app.post('/api/export/image', (req: Request, res: Response) => {
         if (pending?.bestResult) {
           resolve(pending.bestResult);
         } else {
-          reject(new Error('Export timed out after 30 seconds'));
+          reject(new Error('Export timed out after 120 seconds'));
         }
-      }, 30000);
+      }, 120000); // cena com screenshots grandes leva mais de 30s no SVG
 
       pendingExports.set(requestId, { resolve, reject, timeout, collectionTimeout: null, bestResult: null });
     });

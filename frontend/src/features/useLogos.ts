@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CaptureUpdateAction } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
+import { blobToDataURL, fitDentroDe, medirSvg, rasterizarSvg } from './svgRaster'
 
 /**
  * Banco de logos: a pasta no servidor é a fonte, e inserir traz a imagem pra
@@ -51,38 +52,18 @@ const pedirJson = async (url: string, init?: RequestInit): Promise<any> => {
   return response.json()
 }
 
-const blobToDataURL = (blob: Blob): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = () => reject(reader.error ?? new Error('falha ao ler o arquivo'))
-    reader.readAsDataURL(blob)
-  })
-
-const fit = (width: number, height: number): { width: number; height: number } => {
-  if (!(width > 0) || !(height > 0)) return { width: LOGO_SIZE, height: LOGO_SIZE }
-  const scale = LOGO_SIZE / Math.max(width, height)
-  return { width: Math.round(width * scale), height: Math.round(height * scale) }
-}
-
 /**
  * SVG é medido lendo o próprio arquivo: muitos vêm só com `viewBox`, e nesse
  * caso o naturalWidth do navegador volta zero e a logo entraria achatada.
+ * A rasterização em si (e o porquê dela) mora em ./svgRaster.
  */
 const dimensionsFor = async (
   logo: LogoInfo,
   blob: Blob,
 ): Promise<{ width: number; height: number }> => {
   if (logo.mime === 'image/svg+xml') {
-    const text = await blob.text()
-    const width = /\swidth="([\d.]+)/.exec(text)?.[1]
-    const height = /\sheight="([\d.]+)/.exec(text)?.[1]
-    if (width && height) return fit(Number(width), Number(height))
-    const viewBox = /viewBox="([^"]+)"/.exec(text)?.[1]
-    if (viewBox) {
-      const parts = viewBox.trim().split(/[\s,]+/).map(Number)
-      if (parts.length === 4) return fit(parts[2], parts[3])
-    }
+    const medida = medirSvg(await blob.text())
+    if (medida) return fitDentroDe(LOGO_SIZE, medida.width, medida.height)
     return { width: LOGO_SIZE, height: LOGO_SIZE }
   }
 
@@ -94,65 +75,7 @@ const dimensionsFor = async (
       image.onerror = () => reject(new Error('não consegui abrir a imagem'))
       image.src = url
     })
-    return fit(natural.width, natural.height)
-  } finally {
-    URL.revokeObjectURL(url)
-  }
-}
-
-/**
- * SVG entra na cena rasterizado, e não como SVG.
- *
- * O Excalidraw escurece o canvas inteiro com um filtro (`invert(93%)
- * hue-rotate(180deg)`) e, pra imagem não sair negativa, aplica o filtro
- * contrário em cima dela. Só que essa compensação exclui SVG de propósito
- * (`mimeType !== image/svg+xml` no renderElement), então uma logo vetorial
- * aparece com a luminosidade trocada no tema escuro: o laranja do Figma vira
- * salmão claro, e uma arte preta vira branca.
- *
- * Rasterizar em 4x resolve sem gambiarra de tema: a logo passa a ser tratada
- * como qualquer imagem e fica com a cor real nos dois temas, com folga de
- * resolução pra ampliar no canvas.
- */
-const RASTER_SCALE = 4
-
-const comDimensoes = (texto: string, width: number, height: number): string => {
-  let svg = texto
-  if (!/xmlns=/i.test(svg)) {
-    svg = svg.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"')
-  }
-  // Sem width/height explícitos o navegador rasteriza no tamanho que quiser,
-  // e a maioria dos ícones traz só o viewBox.
-  return svg.replace(/<svg\b([^>]*)>/i, (_tag, attrs: string) => {
-    const limpo = attrs.replace(/\swidth="[^"]*"/i, '').replace(/\sheight="[^"]*"/i, '')
-    return `<svg${limpo} width="${Math.round(width)}" height="${Math.round(height)}">`
-  })
-}
-
-const rasterizarSvg = async (
-  texto: string,
-  size: { width: number; height: number },
-): Promise<string> => {
-  const largura = Math.max(1, Math.round(size.width * RASTER_SCALE))
-  const altura = Math.max(1, Math.round(size.height * RASTER_SCALE))
-  const blob = new Blob([comDimensoes(texto, largura, altura)], {
-    type: 'image/svg+xml;charset=utf-8',
-  })
-  const url = URL.createObjectURL(blob)
-  try {
-    const imagem = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image()
-      img.onload = () => resolve(img)
-      img.onerror = () => reject(new Error('não consegui desenhar o SVG'))
-      img.src = url
-    })
-    const canvas = document.createElement('canvas')
-    canvas.width = largura
-    canvas.height = altura
-    const contexto = canvas.getContext('2d')
-    if (!contexto) throw new Error('canvas indisponível')
-    contexto.drawImage(imagem, 0, 0, largura, altura)
-    return canvas.toDataURL('image/png')
+    return fitDentroDe(LOGO_SIZE, natural.width, natural.height)
   } finally {
     URL.revokeObjectURL(url)
   }
