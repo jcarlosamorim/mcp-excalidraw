@@ -172,11 +172,23 @@ edges. [AGENT.md](AGENT.md) has the details and the retry/repair logic.
 
 ## Quick Start (Docker)
 
-> **Heads up:** the images below are the **upstream** ones — they do not include this fork's canvas toolkit (projects,
-> card stacks, mind maps, logos, agent). To run this fork in Docker, build it yourself:
-> `docker build -f Dockerfile.canvas -t excalidraw-canvas .`
+> **Heads up:** the `ghcr.io/yctimlin/...` images below are the **upstream** ones — they do not include this fork's
+> canvas toolkit (projects, card stacks, mind maps, logos, agent).
 
-Canvas server:
+To run **this fork** in Docker, build it yourself (both images are built and smoke-tested on every push by
+[CI](.github/workflows/docker.yml), so this is a known-good path):
+
+```bash
+docker build -f Dockerfile.canvas -t excalidraw-canvas .
+docker run -d -p 3000:3000 \
+  -v ~/.excalidraw-canvas:/root/.excalidraw-canvas \
+  -v ~/Documents/Excalidraw:/root/Documents/Excalidraw \
+  --name excalidraw-canvas excalidraw-canvas
+```
+
+Mount those two volumes or your scenes and projects die with the container.
+
+Upstream canvas server:
 ```bash
 docker run -d -p 3000:3000 --name mcp-excalidraw-canvas ghcr.io/yctimlin/mcp_excalidraw-canvas:latest
 ```
