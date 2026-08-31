@@ -1,16 +1,22 @@
-# Excalidraw MCP Server & Agent Skill
+# Excalidraw Canvas — MCP Server, Agent Skill & Canvas Toolkit
 
-[![CI](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/ci.yml/badge.svg)](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/ci.yml)
-[![Docker Build & Push](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/docker.yml/badge.svg)](https://github.com/yctimlin/mcp_excalidraw/actions/workflows/docker.yml)
-[![NPM Version](https://img.shields.io/npm/v/mcp-excalidraw-server)](https://www.npmjs.com/package/mcp-excalidraw-server)
+[![CI](https://github.com/jcarlosamorim/mcp-excalidraw/actions/workflows/ci.yml/badge.svg)](https://github.com/jcarlosamorim/mcp-excalidraw/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Run a live Excalidraw canvas and control it from AI agents. This repo provides:
+Run a live Excalidraw canvas on your own machine and control it from AI agents — or from your own hands.
 
-- **MCP Server**: Connect via Model Context Protocol (Claude Desktop, Cursor, Codex CLI, etc.)
-- **Agent Skill**: Portable skill for Claude Code, Codex CLI, and other skill-enabled agents
+> **This is a fork of [yctimlin/mcp_excalidraw](https://github.com/yctimlin/mcp_excalidraw)** (MIT), kept in sync with
+> everything the upstream does — MCP server, agent skill, 26 tools — and extended with a **canvas toolkit** that turns it
+> into a daily-driver whiteboard: card columns, per-card documents, real project files, mind maps, a logo library, and a
+> diagram agent that interviews you before drawing. See [What This Fork Adds](#what-this-fork-adds).
 
-Keywords: Excalidraw agent skill, Excalidraw MCP server, AI diagramming, Claude Code skill, Codex CLI skill, Claude Desktop MCP, Cursor MCP, Mermaid to Excalidraw.
+This repo provides:
+
+- **Canvas app**: a private Excalidraw at `127.0.0.1`, with persistent scenes and project files on disk
+- **MCP Server**: connect via Model Context Protocol (Claude Code, Claude Desktop, Cursor, Codex CLI, etc.)
+- **Agent Skill**: portable skill for Claude Code, Codex CLI, and other skill-enabled agents
+
+Keywords: Excalidraw agent skill, Excalidraw MCP server, AI diagramming, local-first whiteboard, Claude Code skill, Codex CLI skill, Claude Desktop MCP, Cursor MCP, Mermaid to Excalidraw.
 
 ## Demo
 
@@ -22,6 +28,7 @@ Keywords: Excalidraw agent skill, Excalidraw MCP server, AI diagramming, Claude 
 
 - [Demo](#demo)
 - [What It Is](#what-it-is)
+- [What This Fork Adds](#what-this-fork-adds)
 - [How We Differ from the Official Excalidraw MCP](#how-we-differ-from-the-official-excalidraw-mcp)
 - [What's New](#whats-new)
 - [Quick Start (Local)](#quick-start-local)
@@ -46,6 +53,24 @@ This repo contains two separate processes:
 
 - Canvas server: web UI + REST API + WebSocket updates (default `http://127.0.0.1:3000`)
 - MCP server: exposes MCP tools over stdio; syncs to the canvas via `EXPRESS_SERVER_URL`
+
+## What This Fork Adds
+
+Upstream gives you an agent-controllable canvas. This fork also makes it a place **you** work in. Every feature below is
+plain Excalidraw underneath — nothing is a special object type, so the MCP tools still see and edit everything, and the
+scenes still open on excalidraw.com.
+
+| Feature | What it does | Docs |
+|---|---|---|
+| **Persistent canvas** | The scene survives restarts (`~/.excalidraw-canvas/state.json`). Upstream is in-memory only. | — |
+| **Projects** | Multi-scene. Real `.excalidraw` files in a folder are the source of truth; SQLite is just a rebuildable catalog. `Cmd+S` saves to the project, `Cmd+O` opens recents, 4s autosave, deletes go to `.trash`. | [PROJETOS.md](PROJETOS.md) |
+| **Card stack** | Whimsical-style card columns (key `S`). Drag a card between columns and it re-stacks itself — ownership is decided by geometric overlap, not by declaration. | [CARD-STACK.md](CARD-STACK.md) |
+| **Card documents** | Each card opens a Notion-style block editor: headings, lists, clickable checklists, code blocks, quotes. Stored as plain Markdown in the element's `customData`. Progress (`1/3`) shows on the card face. | [CARD-STACK.md](CARD-STACK.md) |
+| **Mind maps** | `Tab` for a child, `Enter` for a sibling, fan-out layout, collapse handles. | [MINDMAP.md](MINDMAP.md) |
+| **Logo library** | Key `B`. **The folder is the library** — drop a PNG/SVG in it and it's there. Search, filter by variant, insert onto the canvas. No database in the middle. | [LOGOS.md](LOGOS.md) |
+| **Diagram agent** | Describe a diagram; it asks 2–7 multiple-choice questions, then draws. Runs against **any OpenAI-compatible endpoint** — a local model included — and is entirely optional. | [AGENT.md](AGENT.md) |
+
+The feature docs are written in **Portuguese**; the code, the API and this README are in English.
 
 ## How We Differ from the Official Excalidraw MCP
 
@@ -93,28 +118,63 @@ Excalidraw now has an [official MCP](https://github.com/excalidraw/excalidraw-mc
 
 ## Quick Start (Local)
 
-Prereqs: Node >= 18, npm
+**Prereqs: Node >= 24** and npm. (Node 24 is required, not optional: the projects catalog uses the built-in
+`node:sqlite` module, which does not exist in Node 18/20 and needs a flag before 23.4.)
 
 ```bash
+git clone https://github.com/jcarlosamorim/mcp-excalidraw.git
+cd mcp-excalidraw
 npm ci
 npm run build
 ```
 
-Terminal 1: start the canvas
+Start the canvas:
 ```bash
 PORT=3000 npm run canvas
 ```
 
-> **Security note:** The server defaults to binding on `127.0.0.1` only. If you need to expose it on a network interface (e.g. Docker, remote access), set `HOST=0.0.0.0` — but ensure you have network-level access controls in place, as the API has no built-in authentication.
+Open `http://127.0.0.1:3000`. That is the whole app — the canvas, the card stacks, the projects panel and the logo
+library all live there. Nothing leaves your machine.
 
-Open `http://127.0.0.1:3000`.
+> **Security note:** The server binds to `127.0.0.1` only by default. If you need to expose it on a network interface
+> (e.g. Docker, remote access), set `HOST=0.0.0.0` — but put network-level access controls in front of it, because the
+> API has no authentication.
 
-Terminal 2: run the MCP server (stdio)
+In a second terminal, run the MCP server (stdio) if you want AI agents to draw on that canvas:
 ```bash
 EXPRESS_SERVER_URL=http://127.0.0.1:3000 node dist/index.js
 ```
 
+In practice you don't run this by hand — your MCP client launches it. See [Configure MCP Clients](#configure-mcp-clients).
+
+### Where your data lives
+
+| Path | What |
+|---|---|
+| `~/.excalidraw-canvas/state.json` | the live scene, restored on restart |
+| `~/.excalidraw-canvas/projects.db` | projects catalog — a cache, rebuildable from the folder |
+| `~/Documents/Excalidraw/` | your `.excalidraw` files — **the source of truth**, openable on excalidraw.com |
+| `~/.excalidraw-canvas/logos/` | the logo library (the folder *is* the library) |
+
+All four are configurable — copy [`.env.example`](.env.example) to `.env` to see every variable.
+
+### Optional: the diagram agent
+
+The agent bar at the bottom of the canvas needs an OpenAI-compatible endpoint. Without one, the rest of the app works
+normally. Point it at a local model (LM Studio, Ollama, vLLM) or a hosted one:
+
+```bash
+LLM_BASE_URL=http://localhost:1234/v1 LLM_MODEL=your-model LLM_NO_SCHEMA=1 PORT=3000 npm run canvas
+```
+
+`LLM_NO_SCHEMA=1` matters for local models: constrained decoding degenerates some of them into repeated labels and zero
+edges. [AGENT.md](AGENT.md) has the details and the retry/repair logic.
+
 ## Quick Start (Docker)
+
+> **Heads up:** the images below are the **upstream** ones — they do not include this fork's canvas toolkit (projects,
+> card stacks, mind maps, logos, agent). To run this fork in Docker, build it yourself:
+> `docker build -f Dockerfile.canvas -t excalidraw-canvas .`
 
 Canvas server:
 ```bash
@@ -131,8 +191,17 @@ The MCP server runs over stdio and can be configured with any MCP-compatible cli
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `EXPRESS_SERVER_URL` | URL of the canvas server | `http://127.0.0.1:3000` |
+| `EXPRESS_SERVER_URL` | URL of the canvas server (MCP side) | `http://127.0.0.1:3000` |
 | `ENABLE_CANVAS_SYNC` | Enable real-time canvas sync | `true` |
+| `PORT` / `HOST` | Canvas server bind | `3000` / `127.0.0.1` |
+| `CANVAS_DATA_DIR` | Scene state + projects catalog | `~/.excalidraw-canvas` |
+| `EXCALIDRAW_PROJECTS_DIR` | Folder of `.excalidraw` project files | `~/Documents/Excalidraw` |
+| `EXCALIDRAW_LOGOS_DIR` | Logo library folder | `$CANVAS_DATA_DIR/logos` |
+| `EXCALIDRAW_DOWNLOADS_DIR` | Scanned to rescue stray `.excalidraw` files | `~/Downloads` |
+| `EXCALIDRAW_EXPORT_DIR` | Where image exports are written | `~/Downloads` |
+| `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` | Diagram agent endpoint (optional) | unset — agent inert |
+| `LLM_NO_SCHEMA` | `1` = plain-text mode instead of JSON schema | unset |
+| `LOG_LEVEL` / `LOG_FILE_PATH` / `DEBUG` | Logging | `info` / platform default / `false` |
 
 ---
 
@@ -149,7 +218,7 @@ Config location:
   "mcpServers": {
     "excalidraw": {
       "command": "node",
-      "args": ["/absolute/path/to/mcp_excalidraw/dist/index.js"],
+      "args": ["/absolute/path/to/mcp-excalidraw/dist/index.js"],
       "env": {
         "EXPRESS_SERVER_URL": "http://127.0.0.1:3000",
         "ENABLE_CANVAS_SYNC": "true"
@@ -187,7 +256,7 @@ Use the `claude mcp add` command to register the MCP server.
 claude mcp add excalidraw --scope user \
   -e EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
   -e ENABLE_CANVAS_SYNC=true \
-  -- node /absolute/path/to/mcp_excalidraw/dist/index.js
+  -- node /absolute/path/to/mcp-excalidraw/dist/index.js
 ```
 
 **Local (node)** - Project-level (shared via `.mcp.json`):
@@ -195,7 +264,7 @@ claude mcp add excalidraw --scope user \
 claude mcp add excalidraw --scope project \
   -e EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
   -e ENABLE_CANVAS_SYNC=true \
-  -- node /absolute/path/to/mcp_excalidraw/dist/index.js
+  -- node /absolute/path/to/mcp-excalidraw/dist/index.js
 ```
 
 **Docker**
@@ -225,7 +294,7 @@ Config location: `.cursor/mcp.json` in your project root (or `~/.cursor/mcp.json
   "mcpServers": {
     "excalidraw": {
       "command": "node",
-      "args": ["/absolute/path/to/mcp_excalidraw/dist/index.js"],
+      "args": ["/absolute/path/to/mcp-excalidraw/dist/index.js"],
       "env": {
         "EXPRESS_SERVER_URL": "http://127.0.0.1:3000",
         "ENABLE_CANVAS_SYNC": "true"
@@ -263,7 +332,7 @@ Use the `codex mcp add` command to register the MCP server.
 codex mcp add excalidraw \
   --env EXPRESS_SERVER_URL=http://127.0.0.1:3000 \
   --env ENABLE_CANVAS_SYNC=true \
-  -- node /absolute/path/to/mcp_excalidraw/dist/index.js
+  -- node /absolute/path/to/mcp-excalidraw/dist/index.js
 ```
 
 **Docker**
@@ -294,7 +363,7 @@ Config location: `~/.config/opencode/opencode.json` or project-level `opencode.j
   "mcp": {
     "excalidraw": {
       "type": "local",
-      "command": ["node", "/absolute/path/to/mcp_excalidraw/dist/index.js"],
+      "command": ["node", "/absolute/path/to/mcp-excalidraw/dist/index.js"],
       "enabled": true,
       "environment": {
         "EXPRESS_SERVER_URL": "http://127.0.0.1:3000",
@@ -331,7 +400,7 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
   "mcpServers": {
     "excalidraw": {
       "command": "node",
-      "args": ["/absolute/path/to/mcp_excalidraw/dist/index.js"],
+      "args": ["/absolute/path/to/mcp-excalidraw/dist/index.js"],
       "env": {
         "EXPRESS_SERVER_URL": "http://127.0.0.1:3000",
         "ENABLE_CANVAS_SYNC": "true"
@@ -364,7 +433,8 @@ Config location: `~/.gemini/antigravity/mcp_config.json`
 
 - **Docker networking**: Use `host.docker.internal` to reach the canvas server running on your host machine. On Linux, you may need `--add-host=host.docker.internal:host-gateway` or use `172.17.0.1`.
 - **Canvas server**: Must be running before the MCP server connects. Start it with `npm run canvas` (local) or `docker run -d -p 3000:3000 ghcr.io/yctimlin/mcp_excalidraw-canvas:latest` (Docker).
-- **Absolute paths**: When using local node setup, replace `/absolute/path/to/mcp_excalidraw` with the actual path where you cloned and built the repo.
+- **Absolute paths**: When using local node setup, replace `/absolute/path/to/mcp-excalidraw` with the actual path where you cloned and built the repo.
+- **The `ghcr.io/yctimlin/...` images are upstream's** and do not carry this fork's canvas toolkit. For the fork, use the local node setup or build the image yourself (`docker build -f Dockerfile.canvas -t excalidraw-canvas .`).
 - **In-memory storage**: The canvas server stores elements in memory. Restarting the server will clear all elements. Use the export/import scripts if you need persistence.
 
 ## Agent Skill (Optional)
@@ -489,16 +559,38 @@ agent-browser screenshot /tmp/canvas.png
 
 ## Known Issues / TODO
 
-All previously listed bugs have been fixed in v2.0. Remaining items:
-
-- [ ] **Persistent storage**: Elements are stored in-memory — restarting the server clears everything. Use `export_scene` / snapshots as a workaround.
-- [ ] **Image export requires a browser**: `export_to_image` and `get_canvas_screenshot` rely on the frontend doing the actual rendering. The canvas UI must be open in a browser.
+- [x] ~~**Persistent storage**~~ — fixed in this fork: the scene is written to `~/.excalidraw-canvas/state.json` and
+      restored on restart, and projects are real `.excalidraw` files on disk.
+- [ ] **Image export requires a browser**: `export_to_image` and `get_canvas_screenshot` rely on the frontend doing the
+      actual rendering, so the canvas UI must be open in a browser.
+- [ ] **Scene sync is not atomic**: `POST /api/elements/sync` clears and repopulates, so a concurrent `GET` can observe
+      a partial scene. Harmless for a single user; it does break automated polling tests.
+- [ ] **The canvas is single-user by design.** No auth, no multiplayer. Keep it on `127.0.0.1`.
 
 Contributions welcome!
 
 ## Development
 
 ```bash
-npm run type-check
-npm run build
+npm run type-check     # tsc --noEmit
+npm run build          # vite build (frontend) + tsc (server)
+npm run dev            # tsc --watch + vite dev server
+npm run test:bind      # regression test: server must not bind beyond 127.0.0.1 by default
 ```
+
+**Testing UI changes:** always run against an isolated instance, never against the canvas you actually use —
+otherwise the test fights your live session and overwrites real work:
+
+```bash
+PORT=3999 CANVAS_DATA_DIR=/tmp/canvas-test EXCALIDRAW_PROJECTS_DIR=/tmp/canvas-test/projects npm run canvas
+```
+
+## Credits & License
+
+MIT — see [LICENSE](LICENSE).
+
+Original project by **[yctimlin](https://github.com/yctimlin)** ([mcp_excalidraw](https://github.com/yctimlin/mcp_excalidraw)):
+the MCP server, the 26 tools, the agent skill and the canvas foundation are theirs. This fork adds the canvas toolkit
+described above and is maintained by [José Carlos Amorim](https://github.com/jcarlosamorim).
+
+Built on [Excalidraw](https://github.com/excalidraw/excalidraw), also MIT.

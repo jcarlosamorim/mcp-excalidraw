@@ -1,7 +1,7 @@
 {
-  "name": "mcp-excalidraw-server",
+  "name": "excalidraw-canvas",
   "version": "1.0.7",
-  "description": "Advanced MCP server for Excalidraw with real-time canvas, WebSocket sync, and comprehensive diagram management",
+  "description": "Local Excalidraw canvas with card stacks, mind maps, project files, a logo library and an interview-driven diagram agent — plus the MCP server that lets AI agents draw on it.",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
@@ -73,24 +73,20 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yctimlin/mcp_excalidraw.git"
+    "url": "https://github.com/jcarlosamorim/mcp-excalidraw.git"
   },
-  "homepage": "https://github.com/yctimlin/mcp_excalidraw#readme",
+  "homepage": "https://github.com/jcarlosamorim/mcp-excalidraw#readme",
   "bugs": {
-    "url": "https://github.com/yctimlin/mcp_excalidraw/issues"
+    "url": "https://github.com/jcarlosamorim/mcp-excalidraw/issues"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   },
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
-  "files": [
-    "src/**/*",
-    "dist/**/*",
-    "*.d.ts",
-    "README.md",
-    "LICENSE"
+  "private": true,
+  "contributors": [
+    {
+      "name": "José Carlos Amorim",
+      "url": "https://github.com/jcarlosamorim"
+    }
   ]
 }
